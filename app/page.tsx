@@ -4,8 +4,8 @@ import {
   CheckCircle2, Circle, Send, 
   Plus, Bot, User as UserIcon, Calendar, ClipboardList, AlertCircle, FileText, ArrowRight, ChevronLeft, ChevronRight, Trash2
 } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { initializeApp, getApps } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { 
   getFirestore, doc, setDoc, onSnapshot, collection, getDocs, deleteDoc
 } from 'firebase/firestore';
@@ -20,10 +20,15 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
 const APP_ID = 'discipline_app';
+
+// BIỆN PHÁP CHỐNG LỖI BUILD NEXT.JS: Chỉ khởi tạo Firebase trên Client (Trình duyệt)
+let app, auth, db;
+if (typeof window !== 'undefined') {
+  app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+  auth = getAuth(app);
+  db = getFirestore(app);
+}
 
 const getFormattedDateString = (dateObj) => {
   const offset = dateObj.getTimezoneOffset() * 60000;
@@ -85,7 +90,7 @@ export default function Dashboard() {
   
   // Quản lý Ngày tháng & Start Date
   const [currentDateObj, setCurrentDateObj] = useState(new Date());
-  const [startDate, setStartDate] = useState(null); // Ngày được đánh dấu là Day 1
+  const [startDate, setStartDate] = useState(null); 
   const todayStr = getFormattedDateString(new Date());
   const currentDateStr = getFormattedDateString(currentDateObj);
 
@@ -104,6 +109,7 @@ export default function Dashboard() {
   const chatEndRef = useRef(null);
 
   useEffect(() => {
+    if (!auth) return; // Nếu đang build trên server, bỏ qua đoạn này
     const initAuth = async () => {
       try {
         await signInAnonymously(auth);
@@ -121,13 +127,12 @@ export default function Dashboard() {
 
   // Lắng nghe Settings (để lấy Start Date)
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
     const settingsRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'main');
     const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
       if (docSnap.exists() && docSnap.data().startDate) {
         setStartDate(docSnap.data().startDate);
       } else {
-        // Nếu chưa có, mặc định gán ngày mai là Day 1
         const tmr = getTomorrowString();
         setStartDate(tmr);
         setDoc(settingsRef, { startDate: tmr }, { merge: true });
@@ -138,7 +143,7 @@ export default function Dashboard() {
 
   // Lắng nghe dữ liệu theo ngày đang chọn
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
     setLoading(true);
     
     const dayRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'dailyLogs', currentDateStr);
@@ -149,7 +154,6 @@ export default function Dashboard() {
         setNotes(data.notes || '');
         setReportSent(data.reportSent || false);
       } else {
-        // Seed Day 1 Checklist (Chỉ gen tự động nếu là Day 1 hoặc Today)
         if (currentDateStr === startDate || (!startDate && currentDateStr === getTomorrowString())) {
           const seedChecklist = defaultDay1Checklist.map((text, index) => ({
             id: `seed-${index}`,
@@ -173,7 +177,7 @@ export default function Dashboard() {
 
   // Lắng nghe đoạn chat
   useEffect(() => {
-    if (!user) return;
+    if (!user || !db) return;
     const chatRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'chats', 'persistentChat');
     const unsubChat = onSnapshot(chatRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -211,20 +215,16 @@ export default function Dashboard() {
     
     setLoading(true);
     try {
-      // 1. Xóa toàn bộ document trong collection dailyLogs
       const logsRef = collection(db, 'artifacts', APP_ID, 'users', user.uid, 'dailyLogs');
       const logsSnap = await getDocs(logsRef);
       const deletePromises = logsSnap.docs.map(d => deleteDoc(d.ref));
       await Promise.all(deletePromises);
       
-      // 2. Xóa cuộc trò chuyện
       await deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'chats', 'persistentChat'));
       
-      // 3. Set lại startDate là ngày mai
       const tmr = getTomorrowString();
       await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'main'), { startDate: tmr }, { merge: true });
       
-      // 4. Đưa UI về hôm nay
       setCurrentDateObj(new Date());
       alert("✅ Đã xóa toàn bộ dữ liệu. Ngày mai chính thức là Day 1.");
     } catch (e) {
@@ -236,7 +236,7 @@ export default function Dashboard() {
   };
 
   const saveDailyData = async (newChecklist, newNotes, isSent = reportSent) => {
-    if (!user) return;
+    if (!user || !db) return;
     const dayRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'dailyLogs', currentDateStr);
     await setDoc(dayRef, {
       checklist: newChecklist,
@@ -308,7 +308,7 @@ export default function Dashboard() {
   };
 
   const executeFinalSubmit = async () => {
-    if (!user) return;
+    if (!user || !db) return;
     setIsSubmitting(false);
     setReportSent(true);
     await saveDailyData(checklist, notes, true);
@@ -403,7 +403,7 @@ CRITICAL: You MUST output the JSON for tomorrow's checklist anywhere in your res
 
   const handleSendChatMessage = async (e) => {
     e.preventDefault();
-    if (!chatInput.trim() || !user) return;
+    if (!chatInput.trim() || !user || !db) return;
 
     const userText = chatInput.trim();
     setChatInput('');
